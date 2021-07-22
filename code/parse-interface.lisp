@@ -76,6 +76,7 @@
 ;;; But if the object is itself a texp, then there is no symbol
 ;;; so just return nil
 
+(defmethod full-name ((texp texp)) nil)
 (defmethod name ((texp texp)) nil)
 
 (defmethod print-object ((texp texp) stream)
@@ -135,6 +136,10 @@
    (index :initform nil :accessor index :initarg :index))
   )
 
+(defmethod full-name ((i instance))
+  (intern (string-upcase (format nil "~a-~d" (name i) (index i)))))
+
+
 (defmethod print-object ((instance instance) stream)
   (format stream "#<Instance ~a ~a>"
 	  (name instance)
@@ -172,6 +177,8 @@
 (defmethod print-object ((constant constant) stream)
   (format stream "#<Constant ~a>"
 	  (name constant)))
+
+(defmethod full-name ((c constant)) (name c))
 
 (defmethod print-as  ((constant constant) (format (eql :xml)) &optional top-level? stream)
   (declare (ignore top-level?))
@@ -1546,6 +1553,44 @@
 (define-predicate object-of (texp interned-object interned-object-name) (default-predicate-model))
 (define-predicate name (interned-object interned-object-name) (default-predicate-model))
 
+;;; A keyworded version of texp-and-names, much easier to use
+(Define-predicate texp-match (texp &rest keyword-args) (default-predicate-model))
+
+(define-predicate-method (ask-data texp-match) (truth-value continuation)
+  (unless (eql truth-value +true+)
+    (error 'ji:model-can-only-handle-positive-queries
+	   :query self
+	   :model (common-lisp:type-of self)))
+  (with-statement-destructured (texp &key subject subject-name relation relation-name object object-name)
+      self
+    (flet ((body (texp)
+             (let* ((t-subject (subject texp))
+                    (t-subject-name (name t-subject))
+                    (t-relation (relation texp))
+                    (t-relation-name (name t-relation))
+                    (t-object (object texp))
+                    (t-object-name (name t-object)))
+               (with-unification
+                (when subject (unify t-subject subject))
+                (when subject-name (unify t-subject-name subject-name))
+                (when relation (unify t-relation relation))
+                (when relation-name (unify t-relation-name relation-name))
+                (when object (unify t-object object))
+                (when object-name (Unify t-object-name object-name))
+                (stack-let ((backward-support (list self +true+ '(ask-data relation-of))))
+                  (funcall continuation backward-support))))))
+      (cond
+       ((and (unbound-logic-variable-p texp)
+             (not (unbound-logic-variable-p subject)))
+        ;; deref the subject in case it's still a bound logic-variable-value vs its value
+        ;; which in some complicated situations is the case
+        (loop for potential-texp in (as-subject (ji::joshua-logic-variable-value subject))
+            do (body potential-texp)))
+       ((unbound-logic-variable-p texp)
+        (error 'ji:model-cant-handle-query
+               :query self
+               :model (common-lisp:type-of self)))
+       (t (body texp))))))
 
 (define-predicate parse-type-answer (texp aggregate type) (default-predicate-model))
 

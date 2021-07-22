@@ -34,11 +34,11 @@
    core-parser-mixin
    ;; joshua linkage
    is-appropriate-response 
-   texp-and-names
+   texp-and-names texp-match
    as-relation as-subject as-object
    relation-of subject-of object-of
    relation subject object
-   get-main get-mains get-mains-and-verb name 
+   get-main get-mains get-mains-and-verb name full-name
    ;; key connectives and constants in START
    ;; (or these only is_main yes and no may be necessary since all the others are probably
    ;; only used in building sentences and those functions are in the start package
