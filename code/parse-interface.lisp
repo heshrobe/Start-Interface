@@ -1561,36 +1561,41 @@
     (error 'ji:model-can-only-handle-positive-queries
 	   :query self
 	   :model (common-lisp:type-of self)))
-  (with-statement-destructured (texp &key subject subject-name relation relation-name object object-name)
-      self
-    (flet ((body (texp)
-             (let* ((t-subject (subject texp))
-                    (t-subject-name (name t-subject))
-                    (t-relation (relation texp))
-                    (t-relation-name (name t-relation))
-                    (t-object (object texp))
-                    (t-object-name (name t-object)))
-               (with-unification
-                (when subject (unify t-subject subject))
-                (when subject-name (unify t-subject-name subject-name))
-                (when relation (unify t-relation relation))
-                (when relation-name (unify t-relation-name relation-name))
-                (when object (unify t-object object))
-                (when object-name (Unify t-object-name object-name))
-                (stack-let ((backward-support (list self +true+ '(ask-data relation-of))))
-                  (funcall continuation backward-support))))))
-      (cond
-       ((and (unbound-logic-variable-p texp)
-             (not (unbound-logic-variable-p subject)))
-        ;; deref the subject in case it's still a bound logic-variable-value vs its value
-        ;; which in some complicated situations is the case
-        (loop for potential-texp in (as-subject (ji::joshua-logic-variable-value subject))
-            do (body potential-texp)))
-       ((unbound-logic-variable-p texp)
-        (error 'ji:model-cant-handle-query
-               :query self
-               :model (common-lisp:type-of self)))
-       (t (body texp))))))
+  (handler-case
+      ;; to make show-joshua-database happy when this can't parse what it passes in.
+      (with-statement-destructured (texp &key subject subject-name relation relation-name object object-name)
+          self
+        (flet ((body (texp)
+                 (let* ((t-subject (subject texp))
+                        (t-subject-name (name t-subject))
+                        (t-relation (relation texp))
+                        (t-relation-name (name t-relation))
+                        (t-object (object texp))
+                        (t-object-name (name t-object)))
+                   (with-unification
+                    (when subject (unify t-subject subject))
+                    (when subject-name (unify t-subject-name subject-name))
+                    (when relation (unify t-relation relation))
+                    (when relation-name (unify t-relation-name relation-name))
+                    (when object (unify t-object object))
+                    (when object-name (Unify t-object-name object-name))
+                    (stack-let ((backward-support (list self +true+ '(ask-data relation-of))))
+                      (funcall continuation backward-support))))))
+          (cond
+           ((and (unbound-logic-variable-p texp)
+                 (not (unbound-logic-variable-p subject)))
+            ;; deref the subject in case it's still a bound logic-variable-value vs its value
+            ;; which in some complicated situations is the case
+            (loop for potential-texp in (as-subject (ji::joshua-logic-variable-value subject))
+                do (body potential-texp)))
+           ((unbound-logic-variable-p texp)
+            (error 'ji:model-cant-handle-query
+                   :query self
+                   :model (common-lisp:type-of self)))
+           (t (body texp)))))
+    (error () (error 'ji:model-cant-handle-query
+                     :query self
+                     :model (common-lisp:type-of self)))))
 
 (define-predicate parse-type-answer (texp aggregate type) (default-predicate-model))
 
