@@ -1241,14 +1241,31 @@
 (defparameter *ignorable-lexical-entry-elements* '()
   )
 
-(defclass xml-lexical-entry-parser (sax-parser)
+
+
+(defclass xml-lexical-entry-parser (sax:default-handler)
   ((current-string :initform nil :accessor current-string)
    (current-category-entry :initform nil :accessor current-category-entry)
    (current-property-entry :initform nil :accessor current-property-entry)
    (definition-entry :Initform nil :accessor definition-entry)
    (state :initform nil :accessor state)
    (stack :initform nil :accessor stack)
+   (value-handled-contents :initform nil :accessor value-handled-contents)
    ))
+
+(defmethod characters ((parser xml-lexical-entry-parser) content)
+  (let ((substring (string-trim '(#\newline #\return #\space) content))
+        (current-string (current-string parser)))
+    (start-trace t "~%Characters, getting content ~a" substring)
+    ;; The documentation says that you may get repeated calls for fragments of the string
+    ;; so this checks for that and concatenates them if so.
+    ;; I haven't seen this actually happen.
+    (setf (current-string parser)
+      (if (null current-string)
+          substring
+        (concatenate 'string current-string substring)))
+    (start-trace t "~%Ending characters ~a" (current-string parser))
+    ))
 
 (defclass has-other-properties-mixin ()
   ((other-properties :initform nil :accessor other-properties)))
@@ -1263,10 +1280,10 @@
    ))
 
 (defmethod start-element ((parser xml-lexical-entry-parser) iri localname qname attrs)
-  (declare (ignore iri qname))
+  (declare (ignore iri ))
   (unless (member localname *ignorable-lexical-entry-elements* :test #'string-equal)
-    (let ((interned-local-name (intern (string-upcase localname))))
-      (start-trace t "~%Starting element ~s ~{~a~^, ~}" interned-local-name attrs)
+    (let ((interned-local-name (intern (string-upcase localname) 'start)))
+      (start-trace t "~%Starting element ~s ~s [~{~a~^, ~}]" interned-local-name qname attrs)
       (my-start-element parser interned-local-name attrs)
       ))
   (values))
@@ -1274,14 +1291,14 @@
 (defmethod end-element ((parser xml-lexical-entry-parser) iri localname qname)
   (declare (ignore iri qname))
   (unless (member localname *ignorable-lexical-entry-elements* :test #'string-equal)
-    (let ((interned-local-name (intern (string-upcase localname))))
+    (let ((interned-local-name (intern (string-upcase localname) 'start)))
       (start-trace t "~%Ending element ~s" interned-local-name)
       (my-end-element parser interned-local-name (state parser))
       ))
   (values))
 
 (defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'definition)) attrs)
-  (let ((word (cdr (assoc "word" attrs :test #'string-equal))))
+  (let ((word (loop for attr in attrs for local-name =  (sax::standard-attribute-local-name attr) when (string-equal local-name  "word") return (sax::standard-attribute-value attr))))
     (when word
       (let ((word (intern word)))
 	(let ((entry (make-instance 'definition-entry :word word)))
@@ -1295,10 +1312,11 @@
   )
 
 (defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'category)) attrs)
-  (let ((category (cdr (assoc "value" attrs :test #'string-equal))))
+  (let ((category (loop for attr in attrs for local-name =  (sax::standard-attribute-local-name attr)
+                      when (string-equal local-name  "value") return (sax::standard-attribute-value attr))))
     (start-trace t "~%Category ~a ~{~a~^, ~}" category attrs)
     (when category
-      (let ((category (intern category)))
+      (let ((category (intern category 'start)))
 	(let ((current-entry (make-instance 'category-entry :category category)))
 	  (push current-entry (categories (definition-entry parser)))
 	  (push (state parser) (stack parser))
@@ -1327,38 +1345,97 @@
 
 (defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'property)) attrs)
   (let ((old-state (state parser)))
+    ;; We're starting this element, so turn this flag off
+    ;; it will be set if there's a value element inside
+    ;; but left nil if not.  In which case our end element
+    ;; will gobble up the contents.
+    (setf (value-handled-contents parser) nil)
     (push (state parser) (stack parser))
     (setf (state parser) 'property)
-    (let ((property-name (cdr (assoc "name" attrs :test #'string-equal))))
+    (let ((property-name (loop for attr in attrs for local-name =  (sax::standard-attribute-local-name attr)
+                             when (string-equal local-name  "name") return (sax::standard-attribute-value attr))))
       (when property-name
-	(let ((entry (list (convert-start-string-to-lisp-atom property-name) nil)))
+	(let ((entry (list (convert-start-string-to-lisp-atom property-name 'start) nil)))
 	  (setf (current-property-entry parser) entry)
-	(cond
-	 ((eql old-state 'inflection-set)
-	  (push entry (inflection-set (current-category-entry parser))))
-	 ((eql old-state 'category)
-	  (push entry (other-properties (current-category-entry parser))))
-	 ((eql old-state 'definition)
-	  (push entry (other-properties (definition-entry parser))))
-	 ))))))
+          (cond
+           ((eql old-state 'inflection-set)
+            (push entry (inflection-set (current-category-entry parser))))
+           ((eql old-state 'category)
+            (push entry (other-properties (current-category-entry parser))))
+           ((eql old-state 'definition)
+            (push entry (other-properties (definition-entry parser))))
+           ))))))
 
 (defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'property)) current-state)
   (unless (eql current-state 'property)
     (error "Unmatched property entries"))
+  ;; we've hit the end of a property element but no value element
+  ;; consumed the contents.  So we have to do it ourselves
+  (unless (value-handled-contents parser)
+    (when (current-string parser)
+      (setf (second (current-property-entry parser)) (convert-start-string-to-lisp-atom (current-string parser))
+        (current-string parser) nil)))
+  ;; cleanup this flag for hygiene
+  (setf (value-handled-contents parser) nil)
   (setf (state parser) (pop (stack parser))
 	(current-property-entry parser) nil)
   )
 
 (defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'value)) attrs)
   (declare (ignore attrs))
+  (start-trace t "~%Starting value")
   (setf (current-string parser) nil)
   )
 
 (defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'value)) current-state)
   (cond ((eql current-state 'property)
-	 (setf (second (current-property-entry parser))
-	   (convert-start-string-to-lisp-atom (current-string parser))))
+         (start-trace t "~%Ending value ~a" (current-string parser))
+	 (setf (second (current-property-entry parser)) (convert-start-string-to-lisp-atom (current-string parser))
+               ;; Mark that the contents were gobbled by the value element
+               (current-string parser) nil
+               (value-handled-contents parser) t))
 	(t (error "Orphaned value entry"))))
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'wordnet_synsets)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'wordnet_synsets)) current-state)
+  )
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'synset)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'synset)) current-state)
+  )
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'synonyms)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'synonyms)) current-state)
+  )
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'synonym)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'synonym)) current-state)
+  )
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'hypernyms)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'hypernyms)) current-state)
+  )
+
+(defmethod my-start-element ((parser xml-lexical-entry-parser) (localname (eql 'hyponyms)) attrs)
+  )
+
+(defmethod my-end-element ((parser xml-lexical-entry-parser) (localname (eql 'hyponyms)) current-state)
+  )
+
+
+
+#|
+
 
 ;;; CONTENT always occurs within an INSTANCE or CONSTANT for which it acculuates a string
 ;;; which is held in current-string
@@ -1379,6 +1456,8 @@
       )))
   (values))
 
+|#
+
 (defmethod my-start-element ((parser xml-lexical-entry-parser) localname attrs)
   (values localname attrs)
   )
@@ -1397,13 +1476,14 @@
 (defmethod parse-lexical-entry ((word symbol) (format (eql :xml)) &optional (server "guest"))
   (or (gethash word *lexicon*)
       (let ((start-lexicon-format (convert-to-lexicon-format word)))
-        (multiple-value-bind (input code) (get-lexical-entry start-lexicon-format :encoding "xml" :server server)
+        (multiple-value-bind (input code) (get-lexical-entry start-lexicon-format :encoding "xml" :server server :external-sources "w")
           (declare (ignore code))
-          (multiple-value-bind (flag parse) (cxml:parse input (make-instance 'xml-lexical-entry-parser))
-            (declare (ignore flag))
-            (setf (gethash word *lexicon*) (definition-entry parse))
-            (definition-entry parse)
-            )))))
+          (let ((parser (make-instance 'xml-lexical-entry-parser)))
+            (multiple-value-bind (flag parse) (cxml:parse input parser)
+              (declare (ignore flag parse))
+            (setf (gethash word *lexicon*) (definition-entry parser))
+            (definition-entry parser)
+            ))))))
 
 (defmethod parse-lexical-entry ((word string) (format (eql :xml)) &optional (server "guest"))
   (let ((word (convert-start-string-to-lisp-atom word)))
@@ -1421,8 +1501,8 @@
         do (setf (aref new-string i) new-char))
     new-string))
 
-(defun convert-start-string-to-lisp-atom (string)
-  (intern (convert-start-string-to-lisp-string string)))
+(defun convert-start-string-to-lisp-atom (string &optional (package *package*))
+  (intern (convert-start-string-to-lisp-string string) package))
 
 (defun convert-start-string-to-lisp-string (string-or-symbol)
   (let* ((string (string string-or-symbol))
@@ -1450,6 +1530,13 @@
 	(let ((noun-entry (find 'noun (categories definition-entry) :key #'category)))
 	  (second (assoc 'has-singular (inflection-set noun-entry))))
       noun)))
+
+(defun find-infinitive-of-verb (verb)
+  (let* ((definition-entry (parse-lexical-entry verb :xml)))
+    (if definition-entry
+	(let ((verb-entry (find 'verb (categories definition-entry) :key #'category)))
+	  (second (assoc 'has-infinitive (inflection-set verb-entry))))
+      verb)))
 
 (defun get-inflection-of-adjective (adjective inflection)
   (let ((definition-entry (parse-lexical-entry adjective :xml)))
@@ -1561,9 +1648,7 @@
     (error 'ji:model-can-only-handle-positive-queries
 	   :query self
 	   :model (common-lisp:type-of self)))
-  (handler-case
-      ;; to make show-joshua-database happy when this can't parse what it passes in.
-      (with-statement-destructured (texp &key subject subject-name relation relation-name object object-name)
+  (with-statement-destructured (texp &key subject subject-name relation relation-name object object-name)
           self
         (flet ((body (texp)
                  (let* ((t-subject (subject texp))
@@ -1592,10 +1677,7 @@
             (error 'ji:model-cant-handle-query
                    :query self
                    :model (common-lisp:type-of self)))
-           (t (body texp)))))
-    (error () (error 'ji:model-cant-handle-query
-                     :query self
-                     :model (common-lisp:type-of self)))))
+           (t (body texp))))))
 
 (define-predicate parse-type-answer (texp aggregate type) (default-predicate-model))
 
