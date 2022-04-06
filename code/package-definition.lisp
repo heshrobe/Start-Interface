@@ -40,6 +40,7 @@
    relation subject object
    get-main get-mains get-mains-and-verb name full-name
    find-singular-of-noun find-infinitive-of-verb
+   convert-start-string-to-lisp-atom
    ;; key connectives and constants in START
    ;; (or these only is_main yes and no may be necessary since all the others are probably
    ;; only used in building sentences and those functions are in the start package

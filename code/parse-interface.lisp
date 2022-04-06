@@ -1502,7 +1502,8 @@
     new-string))
 
 (defun convert-start-string-to-lisp-atom (string &optional (package *package*))
-  (intern (convert-start-string-to-lisp-string string) package))
+  (if (numberp string) string
+    (intern (convert-start-string-to-lisp-string string) package)))
 
 (defun convert-start-string-to-lisp-string (string-or-symbol)
   (let* ((string (string string-or-symbol))
@@ -1630,7 +1631,7 @@
 ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define-predicate is-appropriate-response (texp-relation texp function args) (default-predicate-model))
+(define-predicate is-appropriate-response (texp-relation texp response-function new-main-clause args) (default-predicate-model))
 (define-predicate as-relation (interned-object texp) (default-predicate-model))
 (define-predicate as-subject (interned-object texp) (default-predicate-model))
 (define-predicate as-object (interned-object texp) (default-predicate-model))
